@@ -60,7 +60,7 @@ CREATE TABLE Stores (
 
 
 BULK INSERT Stores
-FROM 'E:\Super-Store-Analysis\Data\Global-Superstore.csv'
+FROM 'E:\E-Commerce-Sales-Optimization\data\raw\Global-Superstore.csv'
 WITH (
     FORMAT= 'CSV',
     FIRSTROW = 2,
