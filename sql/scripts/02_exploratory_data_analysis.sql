@@ -4,38 +4,55 @@
     Author: Bryan Melvida
    
     Purpose:
-    - Analyze demand concentration and regional contribution
-    - Identify growth signals and opportunity gaps
-    - Evaluate product demand and mix performance
-    - Assess pricing and discount sensitivity
-    - Examine fulfillment and cost impact on demand
-    - Evaluate segment demand and contribution
+    - Understand demand concentration and market-level growth relevance
+    - Surface structural growth signals and opportunity gaps
+    - Assess product demand mix and category concentration
+    - Evaluate discount sensitivity and demand quality by market
+    - Understand fulfillment cost relationships and shipping demand mix
+    - Assess segment-level demand contribution
    ============================================================ */
 
 
 USE global_store_sales
 
 
+---------------------------------------------------------------
+-- SNAPSHOT TABLE FOR ANALYTICAL REUSE
+---------------------------------------------------------------
+
+SELECT
+    market,
+    country,
+    sales,
+    discount,
+    category,
+    ship_mode,
+    shipping_cost,
+    segment
+INTO #stg_sales_analysis
+FROM sales_transaction;
+
+
+
 /* ============================================================
-    DEMAND CONCENTRATION & MARKET SHARE CONTRIBUTION
+    MARKET DEMAND CONCENTRATION & GROWTH WEIGHTING
    ------------------------------------------------------------
-    - Assess how demand and revenue are distributed across markets
+    - Evaluate market contribution to inform growth prioritization
    ============================================================ */
 
--- market-level demand concentration metrics
+-- market-level demand concentration for growth weighting
 WITH market_performance AS (
     SELECT
         market,
         COUNT(DISTINCT country) AS country_count,
         SUM(sales) AS total_sales,
-        COUNT(order_date) AS total_order,
+        COUNT(*) AS total_order,
         AVG(sales) AS AOV,
         SUM(sales) / NULLIF(SUM(SUM(sales)) OVER(),0) AS sales_pct
-    FROM sales_transaction
+    FROM #stg_sales_analysis
     GROUP BY market
 )
 
--- metrics for cross-market comparison
 SELECT
     market,
     country_count AS country_count,
@@ -54,23 +71,24 @@ ORDER BY total_sales DESC;
     FINDINGS
    ------------------------------------------------------------
     - Revenue Concentration:
-        - APAC, EU, US, and LATAM collectively account for ~87% of total revenue.
-        - Overall performance heavily depends on these four core markets.
+        - APAC, EU, US, and LATAM account for 87% of total revenue.
+        - Growth focus outside these markets would have limited impact.
     
     - Coverage-Driven Markets:
-        - APAC, EU, and LATAM generate revenue across many countries with moderate order volumes.
-        - Growth in these markets comes from geographic breadth, not concentrated demand.
+        - APAC, EU, and LATAM are structurally broad-based rather than driven by single-country concentration.
+        - Country-level prioritization is not required to justify investment in these markets.
     
     - Demand-Dense Market:
-        - The US delivers revenue comparable to multi-country markets from a single country.
-        - Driven by high order concentration.
+        - The US delivers comparable revenue from a single country via high order concentration.
+        - US growth depends more on demand intensity than geographic expansion.
     
     - Low-Intensity Markets:
-        - Africa and EMEA span wide country coverage but contribute limited revenue and orders.
-        - Broad presence doesn't translate to meaningful demand.
+        - Africa and EMEA show broad presence with limited demand.
+        - Geographic expansion in these markets is unlikely to yield material growth.
     
-    - Minimal Contributor:
-        - Canada contributes minimally to both revenue and order volume.
+    - Low-Contribution Market:
+        - Canada contributes minimally to revenue and orders.
+        - Canada should not be treated as a growth priority market.
    ------------------------------------------------------------ */
 
 
@@ -88,31 +106,30 @@ FROM (
     SELECT
         market,
         SUM(sales) AS total_sales
-    FROM sales_transaction
+    FROM #stg_sales_analysis
     GROUP BY market
 ) AS market_order;
 
 
 
 /* ============================================================
-    PRODUCT DEMAND & MIX PERFORMANCE
+    CATEGORY DEMAND MIX & INVESTMENT RELEVANCE
    ------------------------------------------------------------
-    - Evaluate product-level demand and sales mix contribution
+    - Assess category mix to inform product investment prioritization
    ============================================================ */
 
--- category mix and revenue contribution per market
+-- category revenue mix by market for investment comparison
 WITH product_mix AS (
     SELECT
         market,
         category,
         SUM(sales) AS total_sales
-    FROM sales_transaction
+    FROM #stg_sales_analysis
     GROUP BY
         market,
         category
 )
 
--- rank and percentage share of each category inside its market
 SELECT
     PM.market,
     PM.category,
@@ -121,7 +138,7 @@ SELECT
     FORMAT(
         PM.total_sales/ NULLIF(SUM(PM.total_sales) OVER(PARTITION BY PM.market), 0),'P2'
     ) AS market_category_revenue_pct
-FROM product_mix as PM
+FROM product_mix AS PM
 JOIN #market_revenue_order AS MRO
     ON PM.market = MRO.market
 ORDER BY 
@@ -133,32 +150,32 @@ ORDER BY
 /* ------------------------------------------------------------
     FINDINGS
    ------------------------------------------------------------
-    - Category Mix Structure:
-    	- Most markets show the top two categories at similar revenue share levels.
-    	- The third category drops substantially, with Canada showing the steepest decline.
+    - Category Investment Concentration
+        - Across most markets, revenue concentrates in the top two categories, with a sharp drop to the third.
+        - This rules out equal investment across all categories.
 
-    - Dominant Category Presence:
-        - Technology ranks as the top category in most markets, including APAC, EU, US, EMEA, and Africa.
-        - This indicates Technology as the primary revenue driver across regions.
+    - Technology as a Structural Growth Driver
+        - Technology is the top revenue category across nearly all markets.
+        - Technology functions as the primary revenue anchor across nearly all markets.
 
-    - Secondary Category Competition:
-        - Furniture and Office Supplies compete closely for the second position in most markets.
-        - Their relative rank varies by market, but revenue shares are often within a narrow range.
+    - Secondary Categories Require Market-Specific Decisions
+        - Furniture and Office Supplies compete closely for second position, with rankings varying by market.
+        - Secondary category prioritization should be market-specific, not globally standardized.
 
-    - Balanced Category Mix (US Positive Outlier):
-        - The US shows near-even revenue distribution across all three categories.
-        - No single category dominates, reducing reliance on one product line.
+    - US as a Category-Balanced Exception
+        - The US shows a more evenly distributed category mix.
+        - This supports broader category investment in the US compared to other markets.
    ------------------------------------------------------------ */
 
 
 
 /* ============================================================
-    PRICING & DISCOUNT SENSITIVITY
+    PRICING & DISCOUNT-DRIVEN DEMAND DYNAMICS
    ------------------------------------------------------------
-    - Assess customer response to pricing and discount levels
+    - Evaluate the role of discounting in sustaining vs stimulating demand
    ============================================================ */
 
--- discount level bucketing and market AOV
+-- discount intensity buckets to assess demand quality by market
 WITH market_sensitivity AS (
     SELECT
         market,
@@ -169,21 +186,17 @@ WITH market_sensitivity AS (
         SELECT
             market,
             CASE
-                WHEN discount > 0.50 THEN 'Aggressive'
-                WHEN discount > 0.25 THEN 'High'
-                WHEN discount > 0.10 THEN 'Medium'
-                WHEN discount > 0 THEN 'Low'
-                ELSE 'No-Discount'
+                WHEN discount > 0.20 THEN 'Aggressive (>20%)'
+                ELSE 'No/Low (0-20%)'
             END AS discount_level,
             sales
-        FROM sales_transaction
-    ) AS dicount_tier
+        FROM #stg_sales_analysis
+    ) AS source_table
     GROUP BY
         market,
         discount_level
-)     
+)
 
--- cross-market discount response metrics
 SELECT
     MS.market,
     MS.discount_level,
@@ -199,70 +212,65 @@ JOIN #market_revenue_order AS MRO
 ORDER BY 
     MRO.rank_order,
     CASE
-        WHEN MS.discount_level = 'No-Discount' THEN 1
-        WHEN MS.discount_level = 'Low' THEN 2
-        WHEN MS.discount_level = 'Medium' THEN 3
-        WHEN MS.discount_level = 'High' THEN 4
-        WHEN MS.discount_level = 'Aggressive' THEN 5
+        WHEN MS.discount_level = 'No/Low (0-20%)' THEN 1
+        WHEN MS.discount_level = 'Aggressive (>20%)' THEN 2
     END;
 
 
 /* ------------------------------------------------------------
     FINDINGS
    ------------------------------------------------------------
-    - Core Markets Are Demand-Led (APAC, EU, US, LATAM):
-        - 67% to 86% of all orders occur at Medium or lower discount levels.
-        - AOV remains stable or peaks in Low/Moderate levels, not in heavy discount levels.
-        - High discounts lead to lower order spend, not premium order growth.
-        - Aggressive discounts represent a minor share of orders (0.4% to 8.5% depending on market).
+    - Demand-Led Core Markets (APAC, EU, US, LATAM)
+        - Across core markets, 74–86% of orders occur at No/Low discounts (≤20%), 
+          indicating that demand largely exists without heavy incentives.
+        - Aggressive discounting (>20%) is not required to sustain order volume and generally corresponds to lower order value, 
+          signaling demand activation rather than value creation.
+        - Aggressive discounting does not materially improve demand quality or scale in core markets.
 
-    - Split Price-Driven Buyers (EMEA & Africa):
-        - Majority of orders transact at No-Discount (67%-77%) with normal AOV ranges (199-202).
-        - A large secondary segment only buys at Aggressive discounts (22%-32%) with low AOV (58-78).
+    - Discount-Activated, Low-Quality Demand (EMEA & Africa)
+        - EMEA and Africa show material reliance on aggressive discounts (22–33% of orders).
+        - However, demand activated at aggressive discounts delivers substantially lower AOV, indicating price-only, low-quality demand.
+        - Broad discounting primarily activates low-value volume rather than sustainable growth.
 
-    - Small Full-Price Niche Market (Canada):
-        - 100% of orders occur at No-Discount.
+    - Full-Price-Only Market (Canada)
+        - All observed demand in Canada occurs at No/Low discount levels.
+        - Discounting does not function as a volume driver in Canada.
    ------------------------------------------------------------ */
 
 
 
 /* ============================================================
-    FULFILLMENT & COST IMPACT ON DEMAND
+    FULFILLMENT COST & DEMAND STRUCTURE
    ------------------------------------------------------------
-    - Examine how fulfillment cost and operational factors
-      influence demand
+    - Assess the role of shipping cost in shaping demand distribution
    ============================================================ */
 
--- ship mode delivery records
+-- shipping mode demand and cost distribution by market
 WITH shipping_details AS (
     SELECT
         market,
         ship_mode,
-        COUNT(*) AS order_count,
         AVG(shipping_cost) AS ship_cost_avg,
-        AVG(quantity) AS quantity_avg,
-        SUM(sales) AS total_sales,
-        AVG(DATEDIFF(DAY, order_date, ship_date)) AS delivery_days_avg
-    FROM sales_transaction
+        COUNT(*) AS order_count,
+        SUM(sales) AS total_sales
+    FROM #stg_sales_analysis
     GROUP BY 
         market,
         ship_mode
 )
--- ship mode performance metrics
+
 SELECT
     SD.market,
     ship_mode,
-    delivery_days_avg,
-    FORMAT(order_count, 'N0') AS total_order_count,
+    FORMAT(ship_cost_avg, 'N0') AS ship_cost_avg,
+    FORMAT(order_count, 'N0') AS shipmode_total_order_count,
     FORMAT(
         CAST(order_count AS FLOAT) / NULLIF(SUM(order_count) OVER(PARTITION BY SD.market), 0),'P2'
-    ) AS total_orders_pct,
-    FORMAT(ship_cost_avg, 'N0') AS ship_cost_avg,
-    quantity_avg,
-    FORMAT(total_sales, 'N0') AS revenue,
+    ) AS shipmode_total_orders_pct,
+    FORMAT(total_sales, 'N0') AS shipmode_revenue,
     FORMAT(
         total_sales / NULLIF(SUM(total_sales) OVER(PARTITION BY SD.market), 0), 'P2'
-    ) AS revenue_pct
+    ) AS shipmode_revenue_pct
 FROM shipping_details AS SD
 JOIN #market_revenue_order AS MRO
     ON SD.market = MRO.market
@@ -280,78 +288,31 @@ ORDER BY
 /* ------------------------------------------------------------
     FINDINGS
    ------------------------------------------------------------
-    -  Shipping Preference Is Cost-Led, Not Urgency-Led:
-      - Standard Class takes 60% of orders and ~60% of revenue in APAC, EU, US, LATAM
-      - Same Day stays 5% order share in core markets.
-      - Quantity avg is consistent across modes (2-3 units) across all modes.
-      - Markets consistently avoid higher-cost faster modes.
+    - Limited Demand Sensitivity to Shipping Speed (All Core Markets)
+      - Standard Class consistently accounts for 60% of orders across regions, while faster modes remain capped at 5–15% despite higher costs.
+      - Revenue contribution closely mirrors order mix, indicating limited premium value from fast shipping.
+      - Shipping speed has limited influence on demand or revenue growth in core markets.
+
+    - Fast Shipping Demand Is Structurally Bounded
+      - Adoption of Same Day and First Class remains stable across regions, suggesting demand is largely pre-sorted by willingness to pay.
+      - Shipping speed tier adoption remains stable across regions, with limited variation by cost.
+
+    - Canada as a Distinct Fulfillment Case
+      - Canada deviates from the global pattern, with lower Standard Class reliance and higher revenue concentration in Second Class.
+      - Canada is not representative of global fulfillment behavior.
    ------------------------------------------------------------ */
 
 
 
 /* ============================================================
-    Segment Contribution & Demand Quality
+    Segment Contribution & Demand Quality Profile
    ------------------------------------------------------------
-    - Assess how demand and revenue are distributed across segments
-    - Check how much segments rely on heavy promotions
-    - Measure segment tolerance to shipping cost pressure
+    - Understand segment-level contribution to revenue and demand concentration
+    - Evaluate demand quality via reliance on aggressive promotions
+    - Assess segment sensitivity to fulfillment cost pressure
    ============================================================ */
 
 -- Segment contribution  (market level)
-WITH segment_contribution AS (
-    SELECT
-        market,
-        segment,
-        AVG(sales) AS avg_sales,
-        SUM(sales) AS total_sales,
-        SUM(sales) / NULLIF(SUM(SUM(sales)) OVER(PARTITION BY market), 0) AS sales_pct,
-        COUNT(*) AS total_order,
-        CAST(COUNT(*) AS FLOAT) / NULLIF(SUM(COUNT(*)) OVER(PARTITION BY market), 0) as order_pct
-    FROM sales_transaction
-    GROUP BY
-        market,
-        segment
-)
-SELECT
-    SC.market,
-    SC.segment,
-    FORMAT(SC.avg_sales, 'N0') AS AOV,
-    FORMAT(SC.total_sales, 'N0') AS revenue,
-    FORMAT(SC.sales_pct, 'P2') AS segment_revenue_pct,
-    FORMAT(SC.total_order, 'N0') as total_order,
-    FORMAT(SC.order_pct, 'P2') AS segment_order_pct
-FROM segment_contribution AS SC
-JOIN #market_revenue_order AS MRO
-    ON SC.market = MRO.market
-ORDER BY 
-    MRO.rank_order,
-    CASE
-        WHEN SC.segment = 'Corporate' THEN 1
-        WHEN SC.segment = 'Home Office' THEN 2
-        ELSE 3
-    END;
-
-
-/**
-FINDINGS:
- - Demand Concentration Pattern:
-  - Consumer segment drives 50-54% of revenue consistently across ALL markets
-  - Corporate contributes 26-31%, Home Office 16-19%
-  - This pattern holds regardless of market geography or maturity
-
- - Segment Spending Behavior:
-  - AOV differences between segments are marginal across all markets (differences of 0.6%-3.5%)
- 
- - Premium segments show regional clustering: 
-  - APAC/US pair on Home Office, LATAM/Canada pair on Consumer, while EU and EMEA/Africa show distinct patterns
-**/
-
--- Market Promo-dependency (demand quality)
-
-
-
-
--- Shipping cost tolerance (market view)
 
 
 
