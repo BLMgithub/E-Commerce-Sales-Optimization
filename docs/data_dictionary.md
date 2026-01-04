@@ -1,5 +1,5 @@
 # Stores Data Dictionary
-**Doc scope:** Column and field reference for the [`sales_transaction.csv`](../data/processed/sales_transaction.csv) SQL analysis table.  
+**Doc scope:** Field dictionary for reference for [`sales_transaction.csv`](../data/processed/sales_transaction.csv) used in data analysis scripts.  
 
 | Field Name | Data Type |
 | --- | --- |
@@ -24,5 +24,5 @@
 | quantity | tinyint |
 | discount | decimal |
 | profit | decimal |
-| shhipping_cost | decimal |
+| shipping_cost | decimal |
 | order_priority | nvarchar |

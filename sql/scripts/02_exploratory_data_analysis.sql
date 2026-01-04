@@ -27,6 +27,8 @@ SELECT
     discount,
     category,
     ship_mode,
+    order_date,
+    ship_date,
     shipping_cost,
     segment
 INTO #stg_sales_analysis
@@ -185,8 +187,7 @@ WITH market_sensitivity AS (
     FROM (
         SELECT
             market,
-            CASE
-                WHEN discount > 0.20 THEN 'Aggressive (>20%)'
+            CASE WHEN discount > 0.20 THEN 'Aggressive (>20%)'
                 ELSE 'No/Low (0-20%)'
             END AS discount_level,
             sales
@@ -305,23 +306,191 @@ ORDER BY
 
 
 /* ============================================================
-    Segment Contribution & Demand Quality Profile
+    SEGMENT CONTRIBUTION & DEMAND QUALITY PROFILE
    ------------------------------------------------------------
     - Understand segment-level contribution to revenue and demand concentration
     - Evaluate demand quality via reliance on aggressive promotions
     - Assess segment sensitivity to fulfillment cost pressure
    ============================================================ */
 
--- Segment contribution  (market level)
+---------------------------------------------------------------
+-- SEGMENT SALES AT MIN / MAX COMPLETE YEARS
+---------------------------------------------------------------
+
+WITH complete_years AS (
+    SELECT YEAR(order_date) AS order_year
+    FROM #stg_sales_analysis
+    GROUP BY YEAR(order_date)
+    HAVING COUNT(DISTINCT MONTH(order_date)) = 12
+)
+, year_range AS (
+    SELECT
+        (SELECT MIN(order_year) FROM complete_years) AS min_year,
+        (SELECT MAX(order_year) FROM complete_years) AS max_year
+)
+
+SELECT
+    SSA.market,
+    SSA.segment,
+    SUM(CASE WHEN YR.min_year = YEAR(SSA.order_date) THEN SSA.sales END) AS sales_min_year,
+    SUM(CASE WHEN YR.max_year = YEAR(SSA.order_date) THEN SSA.sales END) AS sales_max_year
+INTO #segment_min_max_years_sales
+FROM #stg_sales_analysis SSA
+CROSS JOIN year_range YR
+WHERE YEAR(SSA.order_date) = YR.min_year
+   OR YEAR(SSA.order_date) = YR.max_year
+GROUP BY
+    SSA.market,
+    SSA.segment;
+
+
+---------------------------------------------------------------
+-- SEGMENT CONTRIBUTION, DEMAND QUALITY & LTD GROWTH PROFILE
+---------------------------------------------------------------
+
+WITH segment_performance AS (
+    SELECT
+        market,
+        segment,
+        discount_level,
+        SUM(sales) / SUM(SUM(sales)) OVER(PARTITION BY market) AS total_sales_pct
+    FROM (
+        SELECT
+            market,
+            segment,
+            sales,
+            CASE WHEN discount > 0.20 THEN 'Aggressive (>20%)'
+                ELSE 'No/Low (0-20%)'
+            END AS discount_level
+        FROM #stg_sales_analysis
+    ) AS source_table
+    GROUP BY
+        market,
+        segment,
+        discount_level
+)
+, promo_composition AS (
+    SELECT
+        market,
+        segment,
+        SUM(CASE WHEN discount_level = 'Aggressive (>20%)'
+                 THEN total_sales_pct ELSE 0 END) AS aggressive_pct,
+        SUM(CASE WHEN discount_level = 'No/Low (0-20%)'
+                 THEN total_sales_pct ELSE 0 END) AS nolow_pct
+    FROM segment_performance
+    GROUP BY market, segment
+)
+, rank_segments AS (
+    SELECT
+        *,
+        ROW_NUMBER() OVER (
+            PARTITION BY market, segment
+            ORDER BY
+                total_sales_pct DESC,
+                CASE WHEN discount_level = 'No/Low (0-20%)' THEN 1
+                    ELSE 2
+                END
+        ) AS rank_number
+    FROM segment_performance
+)
+
+SELECT  
+    RS.market,
+    RS.segment,
+    RS.discount_level,
+    RS.total_sales_pct AS market_segment_revenue_pct,
+    -- PC.aggressive_pct / NULLIF(PC.aggressive_pct + PC.nolow_pct, 0) AS promo_ratio_for_validation,
+    CASE 
+        WHEN PC.aggressive_pct / NULLIF(PC.aggressive_pct + PC.nolow_pct, 0) >= 0.20 
+        THEN 'Yes'
+        ELSE 'No'
+    END AS promo_sensitive,
+    (MMS.sales_max_year - MMS.sales_min_year) / NULLIF(MMS.sales_min_year, 0) AS LTD_growth_rate,
+    ROW_NUMBER() OVER(PARTITION BY RS.market ORDER BY total_sales_pct) AS market_segment_rank
+INTO #segment_classification_metrics
+FROM rank_segments RS
+JOIN promo_composition PC
+    ON RS.market = PC.market
+   AND RS.segment = PC.segment
+JOIN #market_revenue_order MRO
+    ON RS.market = MRO.market
+JOIN #segment_min_max_years_sales MMS
+    ON RS.market = MMS.market
+   AND RS.segment = MMS.segment
+WHERE RS.rank_number = 1
+ORDER BY
+    MRO.rank_order;
 
 
 
+---------------------------------------------------------------
+-- SEGMENT SURVIVAL & ELIMINATION FLAGS
+-- -------------------------------------------------------------
+-- Survival Metrics:
+-- Revenue size: Primary gate (dominance-based)
+-- Promo dependence: Quality discriminator
+-- Growth: Health check only (does not affect survival)
+---------------------------------------------------------------
+
+WITH revenue_benchmark AS (
+    SELECT
+        *,
+        AVG(LTD_growth_rate) OVER (PARTITION BY market) AS market_avg_growth,
+        MAX(CASE WHEN market_segment_rank = 2 THEN market_segment_revenue_pct END) 
+            OVER(PARTITION BY market) AS target_benchmark
+    FROM #segment_classification_metrics
+)
+, classifcation_flags AS(
+    SELECT
+        market,
+        segment,
+        market_segment_revenue_pct,
+        promo_sensitive,
+        target_benchmark,
+        CASE
+            WHEN LTD_growth_rate >= (market_avg_growth) THEN 'Yes'
+            ELSE 'No'
+        END AS healthy_growth,
+        CASE
+            WHEN market_segment_revenue_pct >= (target_benchmark + 0.10) THEN 'Yes'
+            ELSE 'No'
+        END AS top_contributor
+    FROM revenue_benchmark
+)
+SELECT
+    CF.market,
+    CF.segment,
+    FORMAT(CF.market_segment_revenue_pct, 'P2') AS segment_revenue_pct,
+    CF.top_contributor,
+    CF.promo_sensitive,
+    CASE
+        WHEN top_contributor = 'No' THEN 'Deprioritize'
+        WHEN promo_sensitive = 'Yes' THEN 'Deprioritize'
+        ELSE 'Invest'
+    END AS segment_classification
+FROM classifcation_flags AS CF
+JOIN #market_revenue_order AS MRO
+    ON CF.market = MRO.market
+ORDER BY
+    MRO.rank_order,
+    CF.segment
 
 
 /* ------------------------------------------------------------
     FINDINGS
    ------------------------------------------------------------
-    - Short Summary Findings
+    - Consumer as the Only Structurally Dominant Segment
+      - Consumer contributes 41–53% of revenue across all markets and is the top contributor everywhere.
+      - Consumer demand consistently shows low promo sensitivity.
+      - No other segment meets relative dominance thresholds in any market.
+
+    - Non-Consumer Segments Do Not Survive Scale or Quality Filters
+      - Corporate 24–29% and Home Office 14–18% never achieve sufficient contribution to influence investment logic.
+      - Observed growth in these segments does not overcome lack of scale and, in some cases, lower demand quality.
+      
+    - Segment Structure Is Globally Consistent
+      - Segment mix follows the same pattern across all markets: Consumer > Corporate > Home Office
+      - Segment composition does not explain differences in market performance or growth.
    ------------------------------------------------------------ */
 
 
