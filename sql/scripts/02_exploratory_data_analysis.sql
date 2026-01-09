@@ -1,15 +1,13 @@
 /* ============================================================
-    Project: E-Commerce Sales Optimization
+    Project: Growth Budget Allocation: $3M Strategy for 2015
     File: 02_exploratory_data_analysis.sql
     Author: Bryan Melvida
    
     Purpose:
-    - Understand demand concentration and market-level growth relevance
-    - Surface structural growth signals and opportunity gaps
-    - Assess product demand mix and category concentration
-    - Evaluate discount sensitivity and demand quality by market
-    - Understand fulfillment cost relationships and shipping demand mix
-    - Assess segment-level demand contribution
+    - Apply demand and viability checks for budget allocation
+    - Surface candidate signals that could actually move the decision
+    - Kill narratives that don’t scale or rely on incentives
+    - Produce inputs for synthesis, not conclusions
    ============================================================ */
 
 
@@ -37,460 +35,439 @@ FROM sales_transaction;
 
 
 /* ============================================================
-    MARKET DEMAND CONCENTRATION & GROWTH WEIGHTING
+    MARKET DEMAND & BUDGET ABSORPTION GATE
    ------------------------------------------------------------
-    - Evaluate market contribution to inform growth prioritization
+    - Test whether market scale is sufficient to materially absorb incremental budget
+
+    Narrative under test: 
+    - Every active market contributes to growth, so budget should be distributed broadly rather than concentrated in a few
    ============================================================ */
 
--- market-level demand concentration for growth weighting
+
 WITH market_performance AS (
     SELECT
         market,
         COUNT(DISTINCT country) AS country_count,
-        SUM(sales) AS total_sales,
-        COUNT(*) AS total_order,
+        SUM(sales) AS revenue,
+        SUM(sales) / NULLIF(SUM(SUM(sales)) OVER(), 0) AS revenue_pct,
         AVG(sales) AS AOV,
-        SUM(sales) / NULLIF(SUM(SUM(sales)) OVER(),0) AS sales_pct
+        COUNT(*) AS order_count,
+        CAST(COUNT(*) AS FLOAT) / NULLIF(SUM(COUNT(*)) OVER(), 0) AS order_count_pct
     FROM #stg_sales_analysis
     GROUP BY market
 )
-
 SELECT
     market,
-    country_count AS country_count,
-    FORMAT(total_sales / 1e6, 'N2') AS 'revenue(M)',
-    FORMAT(sales_pct, 'P2') AS market_revenue_pct,
-    FORMAT(total_order, 'N0') AS order_count,
-    FORMAT(AOV, 'N2') AS AOV,
-    FORMAT((total_sales / country_count) / 1e6, 'N2') AS 'avg_country_revenue(M)',
-    FORMAT(total_order / country_count, 'N0') AS 'country_orders'
+    country_count,
+    FORMAT(revenue / 1e6, 'N2') AS 'revenue (in millions)',
+    FORMAT(revenue_pct, 'P2') AS revenue_pct,
+    FORMAT(AOV, 'N0') AS AOV,
+    FORMAT(order_count, 'N0') AS order_count,
+    FORMAT(order_count_pct, 'P2') AS order_count_pct
 FROM market_performance
-ORDER BY total_sales DESC;
-
+ORDER BY revenue DESC;
 
 
 /* ------------------------------------------------------------
     FINDINGS
    ------------------------------------------------------------
-    - Revenue Concentration:
-        - APAC, EU, US, and LATAM account for 87% of total revenue.
-        - Growth focus outside these markets would have limited impact.
-    
-    - Coverage-Driven Markets:
-        - APAC, EU, and LATAM are structurally broad-based rather than driven by single-country concentration.
-        - Country-level prioritization is not required to justify investment in these markets.
-    
-    - Demand-Dense Market:
-        - The US delivers comparable revenue from a single country via high order concentration.
-        - US growth depends more on demand intensity than geographic expansion.
-    
-    - Low-Intensity Markets:
-        - Africa and EMEA show broad presence with limited demand.
-        - Geographic expansion in these markets is unlikely to yield material growth.
-    
-    - Low-Contribution Market:
-        - Canada contributes minimally to revenue and orders.
-        - Canada should not be treated as a growth priority market.
+    - Demand Is Concentrated in Core Markets
+        - APAC, EU, US, and LATAM account for 87% of revenue and 80% of orders
+        - Markets outside this group lack sufficient scale to materially absorb incremental budget
+        - Implication: Growth allocation outside core markets has limited impact
+
+    - Geographic Coverage Without Demand Fails the Absorption Test
+        - EMEA and Africa show wide geographic presence but low revenue and order contribution
+        - Canada shows neither scale nor demand health (low revenue, low order volume, low AOV)
+        - Implication: These markets fail the budget absorption gate and should be deprioritized
+   ------------------------------------------------------------ */
+
+
+
+/* ============================================================
+    CORE MARKET STABILITY CHECK
+   ------------------------------------------------------------
+    - Test whether revenue and demand contribution hold steady over time
+    - Strengthen confidence in markets that pass
+    - Flag markets that break consistency for stress testing or deferral
+
+    Narrative under test:
+    - Core markets that absorb budget at scale are stable enough over time to justify incremental growth spend
+   ============================================================ */
+
+
+WITH market_stability_yoy AS (
+    SELECT 
+        YEAR(order_date) AS order_year,
+        market,
+        SUM(sales) AS revenue
+    FROM #stg_sales_analysis
+    WHERE market IN ('APAC', 'EU', 'US', 'LATAM')
+    GROUP BY 
+        YEAR(order_date),
+        market
+)
+, yoy_preparation AS (
+    SELECT
+        *,
+        LAG(revenue, 1, 0) OVER(PARTITION BY market ORDER BY order_year) AS lag_revenue
+    FROM market_stability_yoy
+)
+
+SELECT 
+    order_year,
+    market,
+    FORMAT(revenue / NULLIF(lag_revenue, 0), 'P2') AS revenue_growth_yoy
+FROM yoy_preparation
+
+
+/* ------------------------------------------------------------
+    FINDINGS
+   ------------------------------------------------------------
+    - Core markets earn spend through scale and stay stable over time
+        - APAC, EU, LATAM grow consistently above 115% year on year
+        - US shows one dip in 2012 (97%) but rebounds and holds above 120% after
+        - No sustained decline or extreme swings in any core market
+        - Evidence confirms budget absorption holds across multiple years
+        - Implication: Core markets can absorb incremental growth budget, Eligible as allocation candidates
    ------------------------------------------------------------ */
 
 
 
 ---------------------------------------------------------------
--- MARKET REVENUE CONCENTRATION ORDER
+-- REFERENCE TABLES
 ---------------------------------------------------------------
 
--- market ranking reference table
-SELECT
-    market,
-    ROW_NUMBER() OVER(ORDER BY total_sales DESC) AS rank_order
-INTO #market_revenue_order
-FROM (
-    SELECT
-        market,
-        SUM(sales) AS total_sales
-    FROM #stg_sales_analysis
-    GROUP BY market
-) AS market_order;
+SELECT core_markets
+INTO #core_markets
+FROM (VALUES ('APAC'), ('EU'), ('US'), ('LATAM')) list_into(core_markets)
+
+-- core markets total revenue and order count
+SELECT 
+    SUM(sales) AS total_revenue,
+    COUNT(*) AS total_order_count
+INTO #total_core_markets
+FROM #stg_sales_analysis
+WHERE market IN (SELECT * FROM #core_markets)
 
 
 
 /* ============================================================
-    CATEGORY DEMAND MIX & INVESTMENT RELEVANCE
+    PRODUCT DEMAND & CAPITAL ABSORPTION GATE
    ------------------------------------------------------------
-    - Assess category mix to inform product investment prioritization
+    - Test whether product level revenue or demand concentration can safely guide incremental allocation
+
+    Narrative under test: 
+    - Concentrating incremental investment in top revenue or demand categories is a safe path to scalable growth
    ============================================================ */
 
--- category revenue mix by market for investment comparison
-WITH product_mix AS (
+
+WITH product_category_performance AS (
     SELECT
-        market,
-        category,
-        SUM(sales) AS total_sales
-    FROM #stg_sales_analysis
+        SSA.category,
+        SUM(SSA.sales) AS revenue,
+        SUM(SSA.sales) / MAX(TCM.total_revenue) AS revenue_pct,
+        COUNT(*) AS order_count,
+        CAST(COUNT(*) AS FLOAT) / MAX(TCM.total_order_count) AS order_count_pct
+    FROM #stg_sales_analysis AS SSA
+    CROSS JOIN #total_core_markets AS TCM
+    WHERE SSA.market IN (SELECT * FROM #core_markets)
     GROUP BY
-        market,
-        category
+        SSA.category
 )
 
 SELECT
-    PM.market,
-    PM.category,
-    FORMAT(PM.total_sales, 'N0') AS revenue,
-    RANK() OVER(PARTITION BY PM.market ORDER BY PM.total_sales DESC) AS rank_in_market,
-    FORMAT(
-        PM.total_sales/ NULLIF(SUM(PM.total_sales) OVER(PARTITION BY PM.market), 0),'P2'
-    ) AS market_category_revenue_pct
-FROM product_mix AS PM
-JOIN #market_revenue_order AS MRO
-    ON PM.market = MRO.market
+    category,
+    FORMAT(revenue / 1e6, 'N2') AS 'revenue (in millions)',
+    FORMAT(revenue_pct, 'P2') AS revenue_pct,
+    FORMAT(order_count, 'N0') AS order_count,
+    FORMAT(order_count_pct, 'P2') AS order_count_pct
+FROM product_category_performance
 ORDER BY 
-    MRO.rank_order;
-
+    revenue DESC;
 
 
 
 /* ------------------------------------------------------------
     FINDINGS
    ------------------------------------------------------------
-    - Category Investment Concentration
-        - Across most markets, revenue concentrates in the top two categories, with a sharp drop to the third.
-        - This rules out equal investment across all categories.
-
-    - Technology as a Structural Growth Driver
-        - Technology is the top revenue category across nearly all markets.
-        - Technology functions as the primary revenue anchor across nearly all markets.
-
-    - Secondary Categories Require Market-Specific Decisions
-        - Furniture and Office Supplies compete closely for second position, with rankings varying by market.
-        - Secondary category prioritization should be market-specific, not globally standardized.
-
-    - US as a Category-Balanced Exception
-        - The US shows a more evenly distributed category mix.
-        - This supports broader category investment in the US compared to other markets.
+    - Category Revenue and Demand Fail as Allocation Signals
+        - Revenue contribution is broadly distributed across categories, with no category clearly dominating total revenue
+        - Technology and Furniture generate comparable revenue to Office Supplies with significantly fewer orders
+        - Office Supplies accounts for the majority of order volume but contributes the smallest share of revenue
+        - Implication: Revenue and demand provide conflicting and non-dominant signals and should not be used to guide budget allocation
    ------------------------------------------------------------ */
 
 
 
 /* ============================================================
-    PRICING & DISCOUNT-DRIVEN DEMAND DYNAMICS
+    INCENTIVE ILLUSION CHECK: PRICING CONTEXT
    ------------------------------------------------------------
-    - Evaluate the role of discounting in sustaining vs stimulating demand
+    - Test whether discounting explains market scale and can reliably guide allocation decisions
+
+    Narrative under test: 
+    - Discounting is a reliable growth lever that explains market scale and should guide where incremental budget is allocated
    ============================================================ */
 
--- discount intensity buckets to assess demand quality by market
-WITH market_sensitivity AS (
+
+WITH promo_sensitivity AS (
     SELECT
-        market,
-        discount_Level,
-        COUNT(market) AS order_count,
-        AVG(sales) AS AOV
+        ST.market,
+        ST.discount_applied,
+        SUM(ST.sales) / MAX(TCM.total_revenue) AS market_revenue_pct,
+        SUM(sales) AS revenue
     FROM (
-        SELECT
+        SELECT 
             market,
-            CASE WHEN discount > 0.20 THEN 'Aggressive (>20%)'
-                ELSE 'No/Low (0-20%)'
-            END AS discount_level,
+            CASE WHEN discount > 0 THEN 'Yes'
+                ELSE 'No'
+            END AS discount_applied,
             sales
         FROM #stg_sales_analysis
-    ) AS source_table
+        WHERE market IN (SELECT * FROM #core_markets)
+    ) AS ST
+    CROSS JOIN #total_core_markets AS TCM
     GROUP BY
-        market,
-        discount_level
+        ST.market,
+        ST.discount_applied
 )
+, global_totals_pct AS (
+    SELECT
+        SUM(CASE WHEN PS.discount_applied = 'Yes' 
+                THEN PS.market_revenue_pct ELSE 0 END) AS discounted_total_revenue_pct,
+        SUM(revenue) / MAX(TCM.total_revenue) AS total_revenue_pct
+    FROM promo_sensitivity AS PS
+    CROSS JOIN #total_core_markets AS TCM
+)
+
+-- Each market's share of global discounted revenue, compared to its share of total revenue
+, market_discount_scale_comparison AS (
+    SELECT
+        PS.market,
+        SUM(PS.market_revenue_pct) AS market_revenue_pct,
+        SUM(CASE WHEN PS.discount_applied = 'Yes' 
+                THEN PS.market_revenue_pct/ GTP.discounted_total_revenue_pct
+                ELSE 0 
+            END) AS yes_discount_revenue_pct
+    FROM promo_sensitivity AS PS
+    CROSS JOIN global_totals_pct AS GTP
+    GROUP BY market
+)    
 
 SELECT
-    MS.market,
-    MS.discount_level,
-    FORMAT(MS.order_count, 'N0') AS order_count,
-    FORMAT(
-        CAST(MS.order_count AS DECIMAL(18,4)) /
-        NULLIF(SUM(MS.order_count) OVER(PARTITION BY MS.market), 0), 'P2'
-    ) AS order_pct,
-    FORMAT(MS.AOV, 'N0') AS AOV
-FROM market_sensitivity AS MS
-JOIN #market_revenue_order AS MRO
-    ON MS.market = MRO.market
-ORDER BY 
-    MRO.rank_order,
-    CASE
-        WHEN MS.discount_level = 'No/Low (0-20%)' THEN 1
-        WHEN MS.discount_level = 'Aggressive (>20%)' THEN 2
-    END;
-
-
-/* ------------------------------------------------------------
-    FINDINGS
-   ------------------------------------------------------------
-    - Demand-Led Core Markets (APAC, EU, US, LATAM)
-        - Across core markets, 74–86% of orders occur at No/Low discounts (≤20%), 
-          indicating that demand largely exists without heavy incentives.
-        - Aggressive discounting (>20%) is not required to sustain order volume and generally corresponds to lower order value, 
-          signaling demand activation rather than value creation.
-        - Aggressive discounting does not materially improve demand quality or scale in core markets.
-
-    - Discount-Activated, Low-Quality Demand (EMEA & Africa)
-        - EMEA and Africa show material reliance on aggressive discounts (22–33% of orders).
-        - However, demand activated at aggressive discounts delivers substantially lower AOV, indicating price-only, low-quality demand.
-        - Broad discounting primarily activates low-value volume rather than sustainable growth.
-
-    - Full-Price-Only Market (Canada)
-        - All observed demand in Canada occurs at No/Low discount levels.
-        - Discounting does not function as a volume driver in Canada.
-   ------------------------------------------------------------ */
-
-
-
-/* ============================================================
-    FULFILLMENT COST & DEMAND STRUCTURE
-   ------------------------------------------------------------
-    - Assess the role of shipping cost in shaping demand distribution
-   ============================================================ */
-
--- shipping mode demand and cost distribution by market
-WITH shipping_details AS (
-    SELECT
-        market,
-        ship_mode,
-        AVG(shipping_cost) AS ship_cost_avg,
-        COUNT(*) AS order_count,
-        SUM(sales) AS total_sales
-    FROM #stg_sales_analysis
-    GROUP BY 
-        market,
-        ship_mode
-)
-
-SELECT
-    SD.market,
-    ship_mode,
-    FORMAT(ship_cost_avg, 'N0') AS ship_cost_avg,
-    FORMAT(order_count, 'N0') AS shipmode_total_order_count,
-    FORMAT(
-        CAST(order_count AS FLOAT) / NULLIF(SUM(order_count) OVER(PARTITION BY SD.market), 0),'P2'
-    ) AS shipmode_total_orders_pct,
-    FORMAT(total_sales, 'N0') AS shipmode_revenue,
-    FORMAT(
-        total_sales / NULLIF(SUM(total_sales) OVER(PARTITION BY SD.market), 0), 'P2'
-    ) AS shipmode_revenue_pct
-FROM shipping_details AS SD
-JOIN #market_revenue_order AS MRO
-    ON SD.market = MRO.market
-ORDER BY
-    MRO.rank_order,
-    CASE 
-        WHEN ship_mode = 'Same Day' THEN 1
-        WHEN ship_mode = 'First Class' THEN 2
-        WHEN ship_mode = 'Second Class' THEN 3
-        ELSE 4
-    END;
-
-
-
-/* ------------------------------------------------------------
-    FINDINGS
-   ------------------------------------------------------------
-    - Limited Demand Sensitivity to Shipping Speed (All Core Markets)
-      - Standard Class consistently accounts for 60% of orders across regions, while faster modes remain capped at 5–15% despite higher costs.
-      - Revenue contribution closely mirrors order mix, indicating limited premium value from fast shipping.
-      - Shipping speed has limited influence on demand or revenue growth in core markets.
-
-    - Fast Shipping Demand Is Structurally Bounded
-      - Adoption of Same Day and First Class remains stable across regions, suggesting demand is largely pre-sorted by willingness to pay.
-      - Shipping speed tier adoption remains stable across regions, with limited variation by cost.
-
-    - Canada as a Distinct Fulfillment Case
-      - Canada deviates from the global pattern, with lower Standard Class reliance and higher revenue concentration in Second Class.
-      - Canada is not representative of global fulfillment behavior.
-   ------------------------------------------------------------ */
-
-
-
-/* ============================================================
-    SEGMENT CONTRIBUTION & DEMAND QUALITY PROFILE
-   ------------------------------------------------------------
-    - Understand segment-level contribution to revenue and demand concentration
-    - Evaluate demand quality via reliance on aggressive promotions
-    - Assess segment sensitivity to fulfillment cost pressure
-   ============================================================ */
-
----------------------------------------------------------------
--- SEGMENT SALES AT MIN / MAX COMPLETE YEARS
----------------------------------------------------------------
-
-WITH complete_years AS (
-    SELECT YEAR(order_date) AS order_year
-    FROM #stg_sales_analysis
-    GROUP BY YEAR(order_date)
-    HAVING COUNT(DISTINCT MONTH(order_date)) = 12
-)
-, year_range AS (
-    SELECT
-        (SELECT MIN(order_year) FROM complete_years) AS min_year,
-        (SELECT MAX(order_year) FROM complete_years) AS max_year
-)
-
-SELECT
-    SSA.market,
-    SSA.segment,
-    SUM(CASE WHEN YR.min_year = YEAR(SSA.order_date) THEN SSA.sales END) AS sales_min_year,
-    SUM(CASE WHEN YR.max_year = YEAR(SSA.order_date) THEN SSA.sales END) AS sales_max_year
-INTO #segment_min_max_years_sales
-FROM #stg_sales_analysis SSA
-CROSS JOIN year_range YR
-WHERE YEAR(SSA.order_date) = YR.min_year
-   OR YEAR(SSA.order_date) = YR.max_year
-GROUP BY
-    SSA.market,
-    SSA.segment;
-
-
----------------------------------------------------------------
--- SEGMENT CONTRIBUTION, DEMAND QUALITY & LTD GROWTH PROFILE
----------------------------------------------------------------
-
-WITH segment_performance AS (
-    SELECT
-        market,
-        segment,
-        discount_level,
-        SUM(sales) / SUM(SUM(sales)) OVER(PARTITION BY market) AS total_sales_pct
-    FROM (
-        SELECT
-            market,
-            segment,
-            sales,
-            CASE WHEN discount > 0.20 THEN 'Aggressive (>20%)'
-                ELSE 'No/Low (0-20%)'
-            END AS discount_level
-        FROM #stg_sales_analysis
-    ) AS source_table
-    GROUP BY
-        market,
-        segment,
-        discount_level
-)
-, promo_composition AS (
-    SELECT
-        market,
-        segment,
-        SUM(CASE WHEN discount_level = 'Aggressive (>20%)'
-                 THEN total_sales_pct ELSE 0 END) AS aggressive_pct,
-        SUM(CASE WHEN discount_level = 'No/Low (0-20%)'
-                 THEN total_sales_pct ELSE 0 END) AS nolow_pct
-    FROM segment_performance
-    GROUP BY market, segment
-)
-, rank_segments AS (
-    SELECT
-        *,
-        ROW_NUMBER() OVER (
-            PARTITION BY market, segment
-            ORDER BY
-                total_sales_pct DESC,
-                CASE WHEN discount_level = 'No/Low (0-20%)' THEN 1
-                    ELSE 2
-                END
-        ) AS rank_number
-    FROM segment_performance
-)
-
-SELECT  
-    RS.market,
-    RS.segment,
-    RS.discount_level,
-    RS.total_sales_pct AS market_segment_revenue_pct,
-    -- PC.aggressive_pct / NULLIF(PC.aggressive_pct + PC.nolow_pct, 0) AS promo_ratio_for_validation,
-    CASE 
-        WHEN PC.aggressive_pct / NULLIF(PC.aggressive_pct + PC.nolow_pct, 0) >= 0.20 
+    market,
+    FORMAT(market_revenue_pct, 'P2') AS market_revenue_pct,
+    FORMAT(yes_discount_revenue_pct, 'P2') AS discounted_revenue_pct,
+    CASE WHEN yes_discount_revenue_pct > market_revenue_pct 
         THEN 'Yes'
         ELSE 'No'
-    END AS promo_sensitive,
-    (MMS.sales_max_year - MMS.sales_min_year) / NULLIF(MMS.sales_min_year, 0) AS LTD_growth_rate,
-    ROW_NUMBER() OVER(PARTITION BY RS.market ORDER BY total_sales_pct) AS market_segment_rank
-INTO #segment_classification_metrics
-FROM rank_segments RS
-JOIN promo_composition PC
-    ON RS.market = PC.market
-   AND RS.segment = PC.segment
-JOIN #market_revenue_order MRO
-    ON RS.market = MRO.market
-JOIN #segment_min_max_years_sales MMS
-    ON RS.market = MMS.market
-   AND RS.segment = MMS.segment
-WHERE RS.rank_number = 1
-ORDER BY
-    MRO.rank_order;
-
-
-
----------------------------------------------------------------
--- SEGMENT SURVIVAL & ELIMINATION FLAGS
--- -------------------------------------------------------------
--- Survival Metrics:
--- Revenue size: Primary gate (dominance-based)
--- Promo dependence: Quality discriminator
--- Growth: Health check only (does not affect survival)
----------------------------------------------------------------
-
-WITH revenue_benchmark AS (
-    SELECT
-        *,
-        AVG(LTD_growth_rate) OVER (PARTITION BY market) AS market_avg_growth,
-        MAX(CASE WHEN market_segment_rank = 2 THEN market_segment_revenue_pct END) 
-            OVER(PARTITION BY market) AS target_benchmark
-    FROM #segment_classification_metrics
-)
-, classifcation_flags AS(
-    SELECT
-        market,
-        segment,
-        market_segment_revenue_pct,
-        promo_sensitive,
-        target_benchmark,
-        CASE
-            WHEN LTD_growth_rate >= (market_avg_growth) THEN 'Yes'
-            ELSE 'No'
-        END AS healthy_growth,
-        CASE
-            WHEN market_segment_revenue_pct >= (target_benchmark + 0.10) THEN 'Yes'
-            ELSE 'No'
-        END AS top_contributor
-    FROM revenue_benchmark
-)
-SELECT
-    CF.market,
-    CF.segment,
-    FORMAT(CF.market_segment_revenue_pct, 'P2') AS segment_revenue_pct,
-    CF.top_contributor,
-    CF.promo_sensitive,
-    CASE
-        WHEN top_contributor = 'No' THEN 'Deprioritize'
-        WHEN promo_sensitive = 'Yes' THEN 'Deprioritize'
-        ELSE 'Invest'
-    END AS segment_classification
-FROM classifcation_flags AS CF
-JOIN #market_revenue_order AS MRO
-    ON CF.market = MRO.market
-ORDER BY
-    MRO.rank_order,
-    CF.segment
+    END AS discount_over_indexes_scale
+FROM market_discount_scale_comparison
+ORDER BY market_revenue_pct DESC;
 
 
 /* ------------------------------------------------------------
     FINDINGS
    ------------------------------------------------------------
-    - Consumer as the Only Structurally Dominant Segment
-      - Consumer contributes 41–53% of revenue across all markets and is the top contributor everywhere.
-      - Consumer demand consistently shows low promo sensitivity.
-      - No other segment meets relative dominance thresholds in any market.
+    - Discounting Does Not Reliably Explain Market Scale
+        - Discounted revenue over indexes in some large markets and under indexes in others.
+        - Over index effects are small and inconsistent across markets.
+        - Implication: Discounting fails the consistency gate and should not be used to guide budget allocation
+   ------------------------------------------------------------ */
 
-    - Non-Consumer Segments Do Not Survive Scale or Quality Filters
-      - Corporate 24–29% and Home Office 14–18% never achieve sufficient contribution to influence investment logic.
-      - Observed growth in these segments does not overcome lack of scale and, in some cases, lower demand quality.
-      
-    - Segment Structure Is Globally Consistent
-      - Segment mix follows the same pattern across all markets: Consumer > Corporate > Home Office
-      - Segment composition does not explain differences in market performance or growth.
+
+
+/* ============================================================
+    FULFILLMENT BEHAVIOR BOUNDARY: COST CONTEXT
+   ------------------------------------------------------------
+    - Test whether willingness to pay increases justify premium fulfillment as a scalable growth lever.
+    
+    Narrative under test: 
+    - Faster delivery increases willingness to pay, so investment in premium fulfillment should be a primary growth lever
+   ============================================================ */
+
+
+WITH shipping_mode_performance AS (
+    SELECT
+        SSA.ship_mode,
+        AVG(DATEDIFF(DAY, SSA.order_date, SSA.ship_date)) AS avg_ship_day,
+        AVG(SSA.shipping_cost) AS avg_shipping_cost,
+        SUM(SSA.sales) / MAX(TCM.total_revenue) AS revenue_pct,
+        CAST(COUNT(*) AS FLOAT) / MAX(TCM.total_order_count) AS order_count_pct
+    FROM #stg_sales_analysis AS SSA
+    CROSS JOIN #total_core_markets AS TCM
+    WHERE SSA.market IN (SELECT * FROM #core_markets)
+    GROUP BY SSA.ship_mode
+)
+
+SELECT
+    ship_mode,
+    avg_ship_day,
+    FORMAT(avg_shipping_cost, 'N0') AS avg_shipping_cost,
+    FORMAT(revenue_pct, 'P2') AS revenue_pct,
+    FORMAT(order_count_pct, 'P2') AS order_count_pct
+FROM shipping_mode_performance
+ORDER BY avg_ship_day;
+
+
+/* ------------------------------------------------------------
+    FINDINGS
+   ------------------------------------------------------------
+    - Faster Delivery Fails to Drive Willingness to Pay
+        - Revenue and demand concentrated in Standard Class accounting for 60.4% and 60.2% respectively
+        - Higher shipping speed does not correspond to higher revenue or order concentration
+        - Demand and revenue scale persist in lower cost, slower fulfillment tiers
+        - Implication: Premium shipping modes fail as a scalable growth lever and should not guide allocation decisions
+   ------------------------------------------------------------ */
+
+
+
+/* ============================================================
+    CUSTOMER SEGMENT ALLOCATION SAFETY CHECK
+   ------------------------------------------------------------
+    - Test whether segment-level investment can be justified beyond market-level allocation
+
+    Narrative under test:
+    - High-value customer segments justify dedicated investment even if they represent a small share of total demand
+   ============================================================ */
+
+
+---------------------------------------------------------------
+-- Contribution size test (whether a segment matters)
+---------------------------------------------------------------
+-- Rule: Prioritizes risk management over coverage. Volatility disqualifies segments faster than size qualifies them.
+
+
+WITH segment_monthly_revenue AS (
+    SELECT
+        YEAR(order_date) AS order_year,
+        MONTH(order_date) AS order_month,
+        segment,
+        SUM(sales) AS monthly_revenue
+    FROM #stg_sales_analysis
+    WHERE market in (SELECT * FROM #core_markets) 
+        AND YEAR(order_date) IN (2013,2014)
+    GROUP BY
+        YEAR(order_date),
+        MONTH(order_date),
+        segment
+)
+, monthly_total_revenue AS(
+    SELECT
+        order_year,
+        order_month,
+        SUM(monthly_revenue) AS total_revenue
+    FROM segment_monthly_revenue
+    GROUP BY
+        order_year,
+        order_month
+)
+, segment_contribution AS (
+    SELECT
+        segment,
+        AVG(contribution_pct) AS mean_pct,
+        STDEV(contribution_pct) AS std_dev,
+        STDEV(contribution_pct) / AVG(contribution_pct) As CV_pct
+    FROM (
+        SELECT
+            SMR.order_year,
+            SMR.order_month,
+            SMR.segment,
+            CAST(SMR.monthly_revenue AS FLOAT) / MTR.total_revenue AS contribution_pct
+        FROM segment_monthly_revenue AS SMR
+        JOIN monthly_total_revenue AS MTR
+            ON SMR.order_year = MTR.order_year
+            AND SMR.order_month = MTR.order_month
+    ) AS source_table
+    GROUP BY segment
+)
+
+SELECT
+    segment,
+    FORMAT(mean_pct, 'P2') AS avg_contribution_pct,
+    FORMAT(std_dev, 'P2') AS contribution_std_dev,
+    FORMAT(CV_pct, 'P2') AS contribution_cv_pct
+FROM segment_contribution;
+
+
+/* ------------------------------------------------------------
+    TEST RESULT (Fail: Home Office)
+   ------------------------------------------------------------
+    - Consumer contributes about 50% of total revenue on average and shows the most consistent contribution relative to its size
+    - Corporate is the second largest contributor, accounting for 31%, and exhibits some variation but remains reasonably consistent given its size
+    - Home Office is excluded, it contributes the least on average and shows the most fluctuation relative to its size
+    - While absolute variation is similar across segments, only Consumer and Corporate remain stable once adjusted for size
+   ------------------------------------------------------------ */
+
+
+
+---------------------------------------------------------------
+-- Organic demand test (whether dependency is real or artificial)
+---------------------------------------------------------------
+-- Rule: Treat demand as artificial unless it persists without incentives or external pressure
+
+
+WITH promo_sensitivity AS (
+    SELECT
+        segment,
+        discount_applied,
+        COUNT(*) AS order_count
+    FROM (
+        SELECT
+            segment,
+            sales,
+            CASE WHEN discount > 0 THEN 'Yes'
+                ELSE 'No'
+            END AS discount_applied
+        FROM #stg_sales_analysis
+        WHERE market IN (SELECT * FROM #core_markets)
+            AND segment != 'Home Office'
+    ) AS source_table
+    GROUP BY 
+        segment,
+        discount_applied
+)
+, demand_comparison AS (
+    SELECT
+        segment,
+        SUM(CASE WHEN discount_applied = 'Yes' THEN order_count ELSE 0 END) 
+            / CAST(SUM(order_count) AS FLOAT) AS discounted_order_pct
+    FROM promo_sensitivity
+    GROUP BY segment
+)
+
+SELECT
+    segment,
+    FORMAT(discounted_order_pct, 'P2') AS discounted_order_count_pct
+FROM demand_comparison
+
+/* ------------------------------------------------------------
+    TEST RESULT (Fail: All Segments)
+   ------------------------------------------------------------
+    - Discounted orders account for about 47% of volume across all segments
+    - Incentive dependence is uniform, with no segment exhibiting organic demand
+    - All segments fail the organic demand gate and are ineligible for persistence testing
+   ------------------------------------------------------------ */
+
+
+
+---------------------------------------------------------------
+-- Persistence test (how risky that dependency is)
+---------------------------------------------------------------
+-- Assesses risk only for segments that already matter and are organic
+
+
+
+
+/* ------------------------------------------------------------
+    FINDINGS
+   ------------------------------------------------------------
+    - Customer Segments Fail as Safe Allocation Targets
+        - Home Office fails the contribution size gate due to low and volatile revenue contribution and is excluded
+        - Consumer and Corporate contribute the majority of revenue but do not demonstrate organic demand
+        - Nearly half of all orders across remaining segments are discount-driven, indicating systemic incentive dependence
+        - No segment qualifies for persistence testing
+        - Implication: Segment level investment introduces incentive and volatility risk and should be ruled out under a risk-managed growth mandate
    ------------------------------------------------------------ */
 
 

@@ -3,27 +3,28 @@
 
 
 ## [01_data_cleaning.sql](../sql/scripts/01_data_cleaning.sql)
-**Purpose:** Prepare analysis-ready data by validating structure, integrity, and consistency, and isolating data quality issues that would invalidate downstream analysis.
+**Purpose:** Validate data fitness for decision analysis; surface and isolate issues that would invalidate downstream conclusions.
 
 | Section | Intent |
 | --- | --- |
-| Raw Data Ingestion | Provision staging tables for raw data persistence |
-| Data Load | Load source CSV data into staging environment |
-| Data Profiling & Structure Audit | Measure column completeness and uniqueness integrity |
+| Raw Data Ingestion | Provision staging tables for raw data |
+| Data Load | Load source data into staging |
+| Data Profiling & Structure Audit | Test column completeness and key integrity |
 | Duplicate & Key Consistency | Identify duplicate records and key collisions |
 | Hierarchy & Dimension Validation | Validate hierarchical field coherence |
-| Continuous Variable Validation | Validate numeric validity, range constraints, and distribution shape |
+| Continuous Variable Validation | Validate numeric ranges and distribution sanity |
 | Data Corrections | Normalize mappings and enforce dimensional consistency |
-| Data Quality Handling | Classify irrecoverable data quality conditions |
+| Data Quality Handling | Flag irrecoverable data quality failures |
 
 
 ## [02_exploratory_data_analysis.sql](../sql/scripts/02_exploratory_data_analysis.sql)
-**Purpose:** To determine where growth is driven by real demand versus incentives or cost effects, and to guide investment prioritization across markets, products, pricing, and segments.
+**Purpose:** Test whether demand can move the budget, kill weak narratives, and feed synthesis only.
+
 
 | Section | Intent |
 | --- | --- |
-| Market Demand Concentration & Growth Weighting | Prioritize markets by growth contribution |
-| Category Demand Mix & Investment Relevance | Guide product investment via category demand mix |
-| Pricing & Discount-Driven Demand Dynamics | Define discounting as a stimulator vs sustainer of demand |
-| Fulfillment Cost & Demand Structure | Attribute demand shape to shipping cost pressure |
-| Segment Contribution & Demand Quality Profile | Quantify segment value, validate promo dependence, and measure fulfillment cost sensitivity |
+| Market Demand & Budget Absorption Gate | Test whether market scale is large enough to move allocation |
+| Product Demand Concentration Gate | Test whether product demand concentration can safely guide allocation |
+| Incentive Illusion Check: Pricing Context | Test whether demand is organic or incentive-driven enough to guide allocation |
+| Fulfillment Behavior Boundary: Cost Context | Test whether fulfillment speed reflects scalable willingness to pay |
+| Customer Segment Survival Check | Test whether segments earn allocation through scale and organic demand |

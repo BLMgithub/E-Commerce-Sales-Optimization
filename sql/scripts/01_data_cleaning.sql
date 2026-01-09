@@ -1,5 +1,5 @@
 /* ============================================================
-    Project: E-Commerce Sales Optimization
+    Project: Growth Budget Allocation: $3M Strategy for 2015
     File: 01_data_cleaning.sql
     Author: Bryan Melvida
    
@@ -7,13 +7,10 @@
     - Ingest raw transactional data
     - Assess data quality, consistency, and anomalies
     - Apply targeted data corrections prior to analysis
-
-    DATA NOTES:
-    - Source: Global-Superstore.csv
    ============================================================ */
 
 
-USE global_stores_sales;
+USE global_store_sales
 
 
 /* ============================================================
@@ -231,8 +228,8 @@ FROM sales_transaction;
     FINDINGS
    ------------------------------------------------------------
     - market to region: Region reused as both macro and sub-market
-    - market to country: 149 Market–Country combinations across 147 countries
-    - subcategory to product_name: 3,797 Subcategory–Product combinations across 3,788 products
+    - market to country: 149 Marketï¿½Country combinations across 147 countries
+    - subcategory to product_name: 3,797 Subcategoryï¿½Product combinations across 3,788 products
    ------------------------------------------------------------ */
 
 
@@ -279,8 +276,8 @@ EXEC(@summary_stats);
 /* ============================================================
     DATA QUALITY CORRECTIONS
    ------------------------------------------------------------
-    - Enforce consistent Market–Country hierarchy
-    - Standardize SubCategory–Product mapping
+    - Enforce consistent Marketï¿½Country hierarchy
+    - Standardize SubCategoryï¿½Product mapping
    ============================================================ */
 
 
