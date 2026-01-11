@@ -87,12 +87,12 @@ ORDER BY revenue DESC;
 /* ============================================================
     CORE MARKET STABILITY CHECK
    ------------------------------------------------------------
-    - Test whether revenue and demand contribution hold steady over time
-    - Strengthen confidence in markets that pass
-    - Flag markets that break consistency for stress testing or deferral
+    - Test directional stability of revenue and demand trends over time
+    - Apply elimination rule: more than one negative YoY year or any consecutive YoY declines fails stability
+    - Advance only stable markets to allocation consideration; flag failures for deferral or stress testing
 
     Narrative under test:
-    - Core markets that absorb budget at scale are stable enough over time to justify incremental growth spend
+    - Surviving core markets must demonstrate historical stability to remain eligible for incremental growth allocation
    ============================================================ */
 
 
@@ -117,19 +117,19 @@ WITH market_stability_yoy AS (
 SELECT 
     order_year,
     market,
-    FORMAT(revenue / NULLIF(lag_revenue, 0), 'P2') AS revenue_growth_yoy
+    FORMAT((revenue - lag_revenue) / NULLIF(lag_revenue, 0), 'P2') AS revenue_growth_yoy
 FROM yoy_preparation
 
 
 /* ------------------------------------------------------------
     FINDINGS
    ------------------------------------------------------------
-    - Core markets earn spend through scale and stay stable over time
-        - APAC, EU, LATAM grow consistently above 115% year on year
-        - US shows one dip in 2012 (97%) but rebounds and holds above 120% after
-        - No sustained decline or extreme swings in any core market
-        - Evidence confirms budget absorption holds across multiple years
-        - Implication: Core markets can absorb incremental growth budget, Eligible as allocation candidates
+    - Core markets show resilient growth and stable trends over time
+        - APAC, EU, and LATAM exhibit sustained positive YoY growth, generally ranging from mid teens to high 30s
+        - The US shows a single contraction in 2012 (-2.8%) followed by a strong rebound in 2013 (+29%) and continued growth in 2014 (+21%)
+        - No market exhibits multi year decline or repeated YoY contraction
+        - Growth persists across consecutive years, supporting budget absorption capacity
+        - Implication: Core markets can absorb incremental growth budget and remain eligible allocation candidates
    ------------------------------------------------------------ */
 
 
