@@ -63,8 +63,9 @@ change allocation decisions.
   - `preprocessing_log.md` — data handling decisions
 
 - `power_bi/`
-  - `artifacts/` — PBIX and model files
-  - `reports/` — exported visuals
+  - `artifacts/` —  exported decision artifacts (PDF and images)
+    - `images/` — exported image previews of decision pages
+  - `reports/` — Power BI reports and model files (PBIX)
 
 ---
 
